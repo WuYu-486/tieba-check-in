@@ -1,0 +1,14 @@
+# 登录凭证与私密配置, 严禁提交
+cookies
+notify.ini
+qr.png
+
+# 部署用 CA 证书包
+cacert.pem
+
+# 运行日志
+*.log
+
+# Python
+__pycache__/
+*.pyc
