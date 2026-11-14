@@ -12,3 +12,7 @@ cacert.pem
 # Python
 __pycache__/
 *.pyc
+
+# 文档
+贴吧凭证更新指南.md
+贴吧自动签到部署规划.md
