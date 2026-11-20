@@ -1,0 +1,30 @@
+贴吧水贴目标清单
+================
+更新时间: 2026-11-20
+运行方式: 服务器 /opt/tieba-sign/tieba_water.py, cron 每天 09:05 触发(内含 0~3 分钟随机抖动)
+规则: 每帖每天 4 条(贴吧经验上限), 每条 +6 经验(客户端协议), 同帖同日内容一致(水/3/+3/6 随机选一)
+配置文件: 服务器 /opt/tieba-sign/water_posts.txt (仓库根目录有同名副本, 修改后需同步上传服务器)
+
+已开启水贴的吧及帖子(共 11 个吧, 11 个帖子):
+
+吧名                帖子 tid      帖子链接
+------------------  ------------  ----------------------------------------
+失忆投捕(自己的水楼) 9078893516    https://tieba.baidu.com/p/9078893516
+clannad             9786663118    https://tieba.baidu.com/p/9786663118
+fate                9827455918    https://tieba.baidu.com/p/9827455918
+lycorisrecoil       8549271938    https://tieba.baidu.com/p/8549271938
+轻音                9100167373    https://tieba.baidu.com/p/9100167373
+白箱                9557727580    https://tieba.baidu.com/p/9557727580
+孤独摇滚            8538595654    https://tieba.baidu.com/p/8538595654
+四月是你的谎言      8147675827    https://tieba.baidu.com/p/8147675827
+吹响次中音号        8536163670    https://tieba.baidu.com/p/8536163670
+girlsbandcry        8583213518    https://tieba.baidu.com/p/8583213518
+mygo                8855348413    https://tieba.baidu.com/p/8855348413
+
+备注:
+- 除"失忆投捕"是自己的水楼外, 其余均为吧友指定的公共水楼
+- 满额运行每天最多 +264 经验(11 帖 x 4 条 x 6, 各吧经验独立计算)
+- 当日进度记录在服务器 water_state.json, 重复运行不会超发
+- 增删目标: 编辑 water_posts.txt(每行一个帖子 URL 或 tid), 同步到服务器后次日生效;
+  当天想立即生效可手动执行 /opt/python/bin/python3 /opt/tieba-sign/tieba_water.py --now
+- 运行日志: 服务器 /opt/tieba-sign/tieba-water.log

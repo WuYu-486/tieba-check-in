@@ -64,8 +64,8 @@ def log(msg):
         pass
 
 
-def http(url, data=None, ua=WEB_UA, cookie=None, retries=2):
-    """GET/POST, 返回 (status, text); 自动解 gzip; GET 自动重试"""
+def http(url, data=None, ua=WEB_UA, cookie=None, retries=2, raw=False):
+    """GET/POST, 返回 (status, text); raw=True 时返回原始字节; 自动解 gzip; GET 自动重试"""
     headers = {"User-Agent": ua}
     if cookie:
         headers["Cookie"] = cookie
@@ -78,23 +78,23 @@ def http(url, data=None, ua=WEB_UA, cookie=None, retries=2):
         req = urllib.request.Request(url, data=body, headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=20) as resp:
-                raw = resp.read()
-                if raw[:2] == b"\x1f\x8b":
-                    raw = gzip.decompress(raw)
-                return resp.status, raw.decode("utf-8", "replace")
+                raw_bytes = resp.read()
+                if raw_bytes[:2] == b"\x1f\x8b":
+                    raw_bytes = gzip.decompress(raw_bytes)
+                return resp.status, raw_bytes if raw else raw_bytes.decode("utf-8", "replace")
         except urllib.error.HTTPError as e:
             try:
-                raw = e.read()
-                if raw[:2] == b"\x1f\x8b":
-                    raw = gzip.decompress(raw)
-                return e.code, raw.decode("utf-8", "replace")
+                raw_bytes = e.read()
+                if raw_bytes[:2] == b"\x1f\x8b":
+                    raw_bytes = gzip.decompress(raw_bytes)
+                return e.code, raw_bytes if raw else raw_bytes.decode("utf-8", "replace")
             except Exception:
-                return e.code, ""
+                return e.code, b"" if raw else ""
         except Exception as e:
             last_err = str(e)
             if i + 1 < attempts:
                 time.sleep(2)
-    return -1, "network error: %s" % last_err
+    return -1, ("network error: %s" % last_err).encode() if raw else "network error: %s" % last_err
 
 
 def load_bduss():
@@ -192,20 +192,21 @@ def resolve_thread(tid, bduss, cache):
     部分页面没有 forum_id 字段, 备用: 提取吧名后走 fnameShareApi 查 fid"""
     if tid in cache:
         return cache[tid]["fid"], cache[tid]["kw"], None
-    status, page = http(THREAD_PAGE_URL.format(tid=tid), cookie="BDUSS=" + bduss)
+    status, page = http(THREAD_PAGE_URL.format(tid=tid), cookie="BDUSS=" + bduss, raw=True)
     if status != 200:
         return None, None, "error"
-    kw_m = re.search(r'f\?kw=([^"&]+)', page)
+    # 页面为 GBK 编码, 在原始字节上提取, 避免整页按 UTF-8 解码产生乱码
+    kw_m = re.search(rb'f\?kw=([^"&]+)', page)
     if not kw_m:
         return None, None, "error"
-    raw_kw = kw_m.group(1)
+    raw_kw = kw_m.group(1).decode("ascii")
     try:
         kw = urllib.parse.unquote(raw_kw, errors="strict")
     except UnicodeDecodeError:
         kw = urllib.parse.unquote(raw_kw, encoding="gbk", errors="replace")
-    fid_m = re.search(r'"forum_id"\s*:\s*"?(\d+)', page)
+    fid_m = re.search(rb'"forum_id"\s*:\s*"?(\d+)', page)
     if fid_m:
-        fid = fid_m.group(1)
+        fid = fid_m.group(1).decode("ascii")
     else:
         api = "https://tieba.baidu.com/f/commit/share/fnameShareApi?ie=utf-8&fname=" + urllib.parse.quote(kw)
         status, text = http(api, cookie="BDUSS=" + bduss)
