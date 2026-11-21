@@ -1,6 +1,7 @@
 # 登录凭证与私密配置, 严禁提交
 cookies
 notify.ini
+deploy.ini
 qr.png
 
 # 部署用 CA 证书包
