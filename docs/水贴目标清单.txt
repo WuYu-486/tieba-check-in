@@ -28,3 +28,6 @@ mygo                8855348413    https://tieba.baidu.com/p/8855348413
 - 增删目标: 编辑 water_posts.txt(每行一个帖子 URL 或 tid), 同步到服务器后次日生效;
   当天想立即生效可手动执行 /opt/python/bin/python3 /opt/tieba-sign/tieba_water.py --now
 - 运行日志: 服务器 /opt/tieba-sign/tieba-water.log
+- 异常告警: 任务非零退出(凭证失效/部分失败/验证码重试超限等)自动发告警邮件
+- 周报: 每周五 22:05 与签到合并推送, 正文含运行总结与各吧经验(签到+水贴融合),
+  签到明细与水贴明细在 .txt 附件中
