@@ -177,7 +177,7 @@ def load_posts():
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            m = re.search(r"/p/(\d+)", line) or re.fullmatch(r"(\d+)", line)
+            m = re.search(r"/p/(\d{6,12})\b", line) or re.fullmatch(r"(\d{6,12})", line)
             if m:
                 tid = m.group(1)
                 if tid not in tids:
