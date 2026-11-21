@@ -3,14 +3,15 @@
 """
 add_water.py - 一键添加水贴(本地工具, 依赖 paramiko)
 用法:
-  python add_water.py <帖子URL或tid> [更多URL/tid...] [--dry-run]
+  python add_water.py <帖子URL或tid> [更多URL/tid...] [--dry-run] [--no-water]
   例: python add_water.py https://tieba.baidu.com/p/8752415673
       python add_water.py 8752415673 9786663118
 说明:
   吧名解析需要贴吧登录态, 本机匿名访问会被 403, 因此解析与服务器列表更新
   都通过 SSH 在服务器上完成(凭证见同目录 deploy.ini, gitignore 排除);
-  完成后自动更新本地 water_posts.txt 并重建 docs/水贴目标清单.txt。
-  --dry-run 只解析并预览, 不做任何修改。
+  添加成功后立即在服务器执行水贴, 自动补齐今日 4 条(已有进度的帖子会跳过);
+  另外自动更新本地 water_posts.txt 并重建 docs/水贴目标清单.txt。
+  --dry-run 只解析并预览, 不做任何修改; --no-water 只添加不立即水贴。
 退出码: 0=成功 1=部分失败 2=失败
 """
 
@@ -89,7 +90,7 @@ def parse_tids(args):
     return tids
 
 
-def ssh_resolve(deploy, tids, dry_run):
+def ssh_connect(deploy):
     try:
         import paramiko
         import hashlib
@@ -118,7 +119,11 @@ def ssh_resolve(deploy, tids, dry_run):
         t.close(); sock.close()
         print("错误: SSH 认证失败", file=sys.stderr)
         sys.exit(2)
+    return t, sock
 
+
+def ssh_resolve(deploy, tids, dry_run):
+    t, sock = ssh_connect(deploy)
     script = REMOTE_SCRIPT.format(tids=json.dumps(tids), dry_run=dry_run)
     cmd = "cd %s && /opt/python/bin/python3 - <<'PYEOF'\n%s\nPYEOF" % (
         deploy["remote_dir"], script)
@@ -136,6 +141,27 @@ def ssh_resolve(deploy, tids, dry_run):
             return json.loads(line[7:])
     print("错误: 远程输出异常:\n%s" % out[:500], file=sys.stderr)
     sys.exit(2)
+
+
+def run_water_remote(deploy, new_tids):
+    """在服务器立即执行水贴任务(已有今日进度的帖子自动跳过), 返回退出码"""
+    t, sock = ssh_connect(deploy)
+    cmd = "cd %s && /opt/python/bin/python3 tieba_water.py --now" % deploy["remote_dir"]
+    chan = t.open_session(timeout=900)
+    chan.exec_command(cmd)
+    out = chan.makefile("rb").read().decode("utf-8", "replace")
+    err = chan.makefile_stderr("rb").read().decode("utf-8", "replace")
+    code = chan.recv_exit_status()
+    t.close(); sock.close()
+    prefixes = tuple("[%s]" % tid for tid in new_tids)
+    for line in out.splitlines():
+        if (line.startswith(prefixes) or "水贴完成" in line
+                or "异常" in line or "错误" in line or "失败" in line):
+            print(line)
+    if code != 0:
+        print("警告: 即时水贴未完全成功(退出码 %d):\n%s" % (code, err[:300]),
+              file=sys.stderr)
+    return code
 
 
 def update_local_posts(tids):
@@ -200,7 +226,7 @@ def rebuild_doc(posts, mapping):
         "规则: 每帖每天 4 条(贴吧经验上限), 每条 +6 经验(客户端协议), "
         "同帖同日内容一致(水/3/+3/6 随机选一)",
         "配置文件: 服务器 /opt/tieba-sign/water_posts.txt (仓库根目录有同名副本); "
-        "推荐用 add_water.py 一键添加, 自动同步两边",
+        "推荐用 add_water.py 一键添加, 自动同步两边并立即完成当日水贴",
         "",
         "已开启水贴的吧及帖子(共 %d 个吧, %d 个帖子):" % (len(rows), len(rows)),
         "",
@@ -216,7 +242,8 @@ def rebuild_doc(posts, mapping):
         "- 满额运行每天最多 +%d 经验(%d 帖 x 4 条 x 6, 各吧经验独立计算)"
         % (len(rows) * 24, len(rows)),
         "- 当日进度记录在服务器 water_state.json, 重复运行不会超发",
-        "- 增删目标: 推荐 python add_water.py <帖子URL或tid> (自动同步服务器与本文档);",
+        "- 增删目标: 推荐 python add_water.py <帖子URL或tid> "
+        "(自动同步服务器与本文档, 并立即完成当日 4 条水贴);",
         "  也可手动编辑 water_posts.txt 后上传服务器, 当天想立即生效可执行",
         "  /opt/python/bin/python3 /opt/tieba-sign/tieba_water.py --now",
         "- 运行日志: 服务器 /opt/tieba-sign/tieba-water.log",
@@ -238,6 +265,8 @@ def main():
     parser.add_argument("targets", nargs="+", help="帖子URL或tid, 可多个")
     parser.add_argument("--dry-run", action="store_true",
                         help="只解析预览, 不做任何修改")
+    parser.add_argument("--no-water", action="store_true",
+                        help="只添加列表, 不立即执行今日水贴(次日 09:05 自动生效)")
     args = parser.parse_args()
 
     tids = parse_tids(args.targets)
@@ -267,9 +296,16 @@ def main():
     update_local_posts(data["added"])
     rebuild_doc(data["posts"], data["map"])
     print("已更新本地 water_posts.txt 与 docs/水贴目标清单.txt")
-    print("服务器列表已同步, 次日 09:05 自动生效; 如需立即执行: "
-          "ssh 服务器后运行 tieba_water.py --now")
-    return 0 if ok_n == len(tids) else 1
+    print("服务器列表已同步")
+    rc = 0 if ok_n == len(tids) else 1
+    if args.no_water:
+        print("已跳过即时水贴(--no-water), 次日 09:05 自动生效")
+    else:
+        print("开始即时水贴(今日已完成的水贴会自动跳过)...")
+        wrc = run_water_remote(deploy, data["added"])
+        if wrc != 0:
+            rc = 1
+    return rc
 
 
 if __name__ == "__main__":
