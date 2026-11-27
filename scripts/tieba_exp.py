@@ -4,7 +4,7 @@
 tieba_exp.py - 关注吧经验查询(本地工具, 依赖 paramiko)
 用法:
   python scripts/tieba_exp.py                 查询全部关注吧: 当前等级/经验/距下一级
-  python scripts/tieba_exp.py --sort name     排序: need(默认, 差得最少在前)|level|name
+  python scripts/tieba_exp.py --sort need     排序: exp(默认, 当前经验降序)|need|level|name
 说明:
   经验阈值来自 docs/贴吧各等级经验值.md, 修改该文档表格即可调整计算口径;
   等级与当前经验通过服务器登录态查询(不写日志、不改服务器状态)。
@@ -129,8 +129,8 @@ def main():
         except Exception:
             pass
     parser = argparse.ArgumentParser(description="关注吧经验查询")
-    parser.add_argument("--sort", choices=["need", "level", "name"], default="need",
-                        help="排序方式: need=距升级最少在前(默认) level name")
+    parser.add_argument("--sort", choices=["exp", "need", "level", "name"], default="exp",
+                        help="排序方式: exp=当前经验降序(默认) need=距升级最少在前 level name")
     args = parser.parse_args()
 
     thresholds = load_thresholds()
@@ -140,8 +140,10 @@ def main():
         rows.sort(key=lambda r: (-r["level"], r["kw"]))
     elif args.sort == "name":
         rows.sort(key=lambda r: r["kw"])
-    else:
+    elif args.sort == "need":
         rows.sort(key=lambda r: (r["need"] is None, r["need"] or 0, r["kw"]))
+    else:
+        rows.sort(key=lambda r: (-r["exp"], r["kw"]))
 
     table = []
     for i, r in enumerate(rows, 1):
