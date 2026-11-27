@@ -21,6 +21,7 @@ import shlex
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 
 import tkinter as tk
@@ -34,6 +35,7 @@ from tieba_water import PER_POST_COUNT
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REMOTE_PY = "/opt/python/bin/python3"
+GUI_LOG = os.path.join(BASE, "tieba-manager-gui.log")
 
 FAMILY_UI = "Microsoft YaHei UI"
 FAMILY_MONO = "Consolas"
@@ -471,8 +473,8 @@ class App:
         raise AppError("远程输出异常: %s" % (out[-300:] or "空"))
 
     def _run_cli(self, args, log):
-        cmd = [sys.executable, "-u", os.path.join(SCRIPT_DIR, args[0])] + \
-            [str(a) for a in args[1:]]
+        args = [str(a) for a in args]
+        cmd = [sys.executable, "-u", os.path.join(SCRIPT_DIR, args[0])] + args[1:]
         env = os.environ.copy()
         env["PYTHONUTF8"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
@@ -548,6 +550,12 @@ class App:
             text.delete("1.0", "1000.0")
         text.see("end")
         text.configure(state="disabled")
+        try:
+            with open(GUI_LOG, "a", encoding="utf-8") as f:
+                f.write("[" + time.strftime("%Y-%m-%d %H:%M:%S") + "] "
+                        + line.rstrip() + "\n")
+        except OSError:
+            pass
 
     def _on_close(self):
         if self._busy and not messagebox.askyesno(
