@@ -3,9 +3,11 @@
 """
 push_mail.py - 日志邮件推送与周报(QQ SMTP, 纯标准库, 无第三方依赖)
 用法:
-  python push_mail.py --weekly tieba-run.log [--water-log tieba-water.log] --subject "贴吧签到周报"
-      周报: 正文=一、本周运行总结(先签到后水贴)+二、各吧本周经验(签到与水贴经验融合);
-      三、签到明细 + 四、水贴明细 封装为 .txt 附件; 发送成功后两个日志均轮转
+  python push_mail.py --weekly tieba-run.log [--water-log tieba-water.log]
+                      [--autopost-log tieba-autopost.log] --subject "贴吧签到周报"
+      周报: 正文=一、本周运行总结(签到/水贴/自动发贴)+二、各吧本周经验(三类经验融合);
+      三、签到明细 + 四、水贴明细 + 五、自动发贴明细 封装为 .txt 附件;
+      发送成功后全部日志轮转
   python push_mail.py --log tieba-run.log --subject "贴吧签到日报"
       提取日志文件中「今天」的行作为正文发送(无当日内容时发送"今日无日志"提醒)
   python push_mail.py --subject "紧急告警" --alert "贴吧凭证已失效"
@@ -15,6 +17,7 @@ push_mail.py - 日志邮件推送与周报(QQ SMTP, 纯标准库, 无第三方�
 周报日志轮转: 发送成功后 log -> log.prev(覆盖更旧归档), 每周日志独立;
   发送失败则不轮转, 未送达数据自动累积到下一期
 水贴吧名映射: 同目录 water_threads.json (tieba_water.py 维护的 tid->吧名 缓存)
+自动发贴吧名映射: 同目录 autopost_targets.json (autopost_manage.py 维护)
 """
 
 import argparse
@@ -41,6 +44,7 @@ if os.path.exists(_cacert):
 
 CONFIG_FILE = os.path.join(BASE, "notify.ini")
 THREAD_MAP_FILE = os.path.join(BASE, "water_threads.json")
+AUTOPOST_TARGETS_FILE = os.path.join(BASE, "autopost_targets.json")
 
 # 签到明细行: [时间] (i/n) [吧名] 签到成功(+N经验) / 签到成功 / 跳过(未加入) / 失败: xxx
 RE_SIGN_DETAIL = re.compile(
@@ -56,6 +60,12 @@ RE_WATER_DETAIL = re.compile(
 RE_WATER_SUMMARY = re.compile(
     r"^\[([\d\- :]+)\] 水贴完成: 成功 (\d+) 帖, 失败 (\d+) 帖, 已完成跳过 (\d+) 帖"
     r"(?:, 已关闭跳过 (\d+) 帖)?$")
+# 自动发贴每日汇总行: [时间] 自动发贴完成: 成功 N 帖, 失败 N 帖, 已完成跳过 N 帖(, 已关闭跳过 N 帖)
+RE_AP_SUMMARY = re.compile(
+    r"^\[([\d\- :]+)\] 自动发贴完成: 成功 (\d+) 帖, 失败 (\d+) 帖, 已完成跳过 (\d+) 帖"
+    r"(?:, 已关闭跳过 (\d+) 帖)?$")
+# 自动发贴明细行: 与水贴明细格式一致
+RE_AP_DETAIL = RE_WATER_DETAIL
 
 
 def load_config():
@@ -120,19 +130,30 @@ def parse_sign(path):
     return summaries, exp_map, details, dates
 
 
-def parse_water(path, thread_map):
-    """解析水贴日志 -> (汇总行, {吧名: {count, total}}, 明细行, 日期集合)"""
+def load_autopost_map():
+    """tid -> 吧名 映射(autopost_targets.json)"""
+    try:
+        with open(AUTOPOST_TARGETS_FILE, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        return {str(t.get("tid")): t.get("kw") or str(t.get("tid"))
+                for t in raw if isinstance(t, dict)}
+    except (OSError, ValueError):
+        return {}
+
+
+def parse_daily_log(path, thread_map, re_summary, re_detail):
+    """解析按帖发贴日志(水贴/自动发贴通用) -> (汇总行, {吧名: {count, total}}, 明细行, 日期集合)"""
     summaries, details, exp_map, dates = [], [], {}, set()
     if path and os.path.exists(path):
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
                 line = line.rstrip()
-                m = RE_WATER_SUMMARY.match(line)
+                m = re_summary.match(line)
                 if m:
                     summaries.append(line)
                     dates.add(m.group(1)[:10])
                     continue
-                m = RE_WATER_DETAIL.match(line)
+                m = re_detail.match(line)
                 if m:
                     details.append(line)
                     dates.add(m.group(1)[:10])
@@ -143,28 +164,37 @@ def parse_water(path, thread_map):
     return summaries, exp_map, details, dates
 
 
-def fmt_fused_line(kw, sign_d, water_d):
-    """融合签到与水贴经验的单吧统计行, 如 [clannad] 签到 48 + 水贴 24 = 72"""
-    sign_part = None
+def parse_water(path, thread_map):
+    return parse_daily_log(path, thread_map, RE_WATER_SUMMARY, RE_WATER_DETAIL)
+
+
+def parse_autopost(path, thread_map):
+    return parse_daily_log(path, thread_map, RE_AP_SUMMARY, RE_AP_DETAIL)
+
+
+def fmt_fused_line(kw, sign_d, water_d, ap_d=None):
+    """融合签到/水贴/自动发贴经验的单吧统计行, 如 [clannad] 签到 48 + 水贴 24 = 72"""
+    parts = []
     if sign_d and sign_d["total"]:
-        sign_part = "签到 %d" % sign_d["total"]
+        parts.append("签到 %d" % sign_d["total"])
     elif sign_d and sign_d["days"]:
-        sign_part = "签到成功*%d(旧日志无经验记录)" % sign_d["days"]
-    water_part = "水贴 %d" % water_d["total"] if water_d and water_d["total"] else None
-    total = (sign_d["total"] if sign_d else 0) + (water_d["total"] if water_d else 0)
-    if sign_part and water_part:
-        return "[%s] %s + %s = %d" % (kw, sign_part, water_part, total)
-    if sign_part:
-        return "[%s] %s = %d" % (kw, sign_part, total)
-    return "[%s] %s = %d" % (kw, water_part, total)
+        parts.append("签到成功*%d(旧日志无经验记录)" % sign_d["days"])
+    if water_d and water_d["total"]:
+        parts.append("水贴 %d" % water_d["total"])
+    if ap_d and ap_d["total"]:
+        parts.append("自动发贴 %d" % ap_d["total"])
+    total = sum(d["total"] for d in (sign_d, water_d, ap_d) if d)
+    return "[%s] %s = %d" % (kw, " + ".join(parts), total)
 
 
-def build_weekly(sign_log, water_log):
+def build_weekly(sign_log, water_log, autopost_log=None):
     """生成周报; 返回 (正文, 附件文本, 日期范围, 是否有数据)"""
     thread_map = load_thread_map()
     s_sum, s_exp, s_det, s_dates = parse_sign(sign_log)
     w_sum, w_exp, w_det, w_dates = parse_water(water_log, thread_map)
-    dates = s_dates | w_dates
+    a_sum, a_exp, a_det, a_dates = parse_autopost(autopost_log,
+                                                  load_autopost_map())
+    dates = s_dates | w_dates | a_dates
     rng = ""
     if dates:
         ds = sorted(dates)
@@ -172,11 +202,12 @@ def build_weekly(sign_log, water_log):
 
     sep = "-" * 40
     out = []
-    # 一、本周运行总结: 先签到, 后水贴
+    # 一、本周运行总结: 签到 -> 水贴 -> 自动发贴
     out.append("一、本周运行总结")
     out.append(sep)
     out.extend(s_sum)
     out.extend(w_sum)
+    out.extend(a_sum)
     out.append("")
     ok_n = fail_n = 0
     for line in s_sum:
@@ -185,51 +216,61 @@ def build_weekly(sign_log, water_log):
             ok_n += int(m.group(2))
             fail_n += int(m.group(5))
     out.append("本周合计: 签到成功 %d 次, 失败 %d 次" % (ok_n, fail_n))
-    if w_sum:
-        w_ok = w_fail = w_skip = w_off = 0
-        for line in w_sum:
-            m = RE_WATER_SUMMARY.match(line)
-            if m:
-                w_ok += int(m.group(2))
-                w_fail += int(m.group(3))
-                w_skip += int(m.group(4))
-                if m.group(5):
-                    w_off += int(m.group(5))
-        line = "水贴合计: 成功 %d 帖次, 失败 %d 帖次, 已完成跳过 %d 帖次" % (
-            w_ok, w_fail, w_skip)
-        if w_off:
-            line += ", 已关闭 %d 帖次" % w_off
-        out.append(line)
-    else:
-        out.append("水贴合计: 本周无水贴记录")
 
-    # 二、各吧本周经验: 签到+水贴融合, 按总经验降序
+    def total_line(label, sums, re_summary):
+        if not sums:
+            return "%s合计: 本周无%s记录" % (label, label)
+        t_ok = t_fail = t_skip = t_closed = 0
+        for line in sums:
+            m = re_summary.match(line)
+            if m:
+                t_ok += int(m.group(2))
+                t_fail += int(m.group(3))
+                t_skip += int(m.group(4))
+                if m.group(5):
+                    t_closed += int(m.group(5))
+        line = "%s合计: 成功 %d 帖次, 失败 %d 帖次, 已完成跳过 %d 帖次" % (
+            label, t_ok, t_fail, t_skip)
+        if t_closed:
+            line += ", 已关闭 %d 帖次" % t_closed
+        return line
+
+    out.append(total_line("水贴", w_sum, RE_WATER_SUMMARY))
+    out.append(total_line("自动发贴", a_sum, RE_AP_SUMMARY))
+
+    # 二、各吧本周经验: 签到+水贴+自动发贴融合, 按总经验降序
     out.append("")
     out.append("")
     out.append("二、各吧本周经验")
     out.append(sep)
-    kws = set(s_exp) | set(w_exp)
+    kws = set(s_exp) | set(w_exp) | set(a_exp)
     if kws:
         def total_of(kw):
             return (s_exp.get(kw, {}).get("total", 0)
-                    + w_exp.get(kw, {}).get("total", 0))
+                    + w_exp.get(kw, {}).get("total", 0)
+                    + a_exp.get(kw, {}).get("total", 0))
         for kw in sorted(kws, key=lambda k: (-total_of(k), k)):
-            out.append(fmt_fused_line(kw, s_exp.get(kw), w_exp.get(kw)))
+            out.append(fmt_fused_line(kw, s_exp.get(kw), w_exp.get(kw),
+                                      a_exp.get(kw)))
         out.append("")
-        out.append("本周经验总计: %d (签到 %d + 水贴 %d)" % (
-            sum(total_of(k) for k in kws),
+        detail = "签到 %d + 水贴 %d" % (
             sum(d["total"] for d in s_exp.values()),
-            sum(d["total"] for d in w_exp.values())))
+            sum(d["total"] for d in w_exp.values()))
+        if a_exp:
+            detail += " + 自动发贴 %d" % sum(d["total"] for d in a_exp.values())
+        out.append("本周经验总计: %d (%s)" % (
+            sum(total_of(k) for k in kws), detail))
     else:
         out.append("(无经验数据)")
 
-    if not s_sum and not s_det and not w_sum and not w_det:
-        return ("周报周期内无任何签到/水贴日志!\n"
+    if not s_sum and not s_det and not w_sum and not w_det \
+            and not a_sum and not a_det:
+        return ("周报周期内无任何签到/水贴/自动发贴日志!\n"
                 "可能定时任务未运行或早已失败, 请检查!"), "", rng, False
 
     body = "\n".join(out)
 
-    # 附件: 三、签到明细 + 四、水贴明细
+    # 附件: 三、签到明细 + 四、水贴明细 + 五、自动发贴明细
     att = ["三、签到明细(按时间顺序)", sep]
     att.extend(s_det if s_det else ["(无签到明细)"])
     att.append("")
@@ -237,6 +278,11 @@ def build_weekly(sign_log, water_log):
     att.append("四、水贴明细(按时间顺序)")
     att.append(sep)
     att.extend(w_det if w_det else ["(无水贴明细)"])
+    att.append("")
+    att.append("")
+    att.append("五、自动发贴明细(按时间顺序)")
+    att.append(sep)
+    att.extend(a_det if a_det else ["(无自动发贴明细)"])
     return body, "\n".join(att), rng, True
 
 
@@ -284,6 +330,7 @@ def main():
     parser.add_argument("--log", help="日志文件路径(取当日内容)")
     parser.add_argument("--weekly", help="签到日志路径(汇总全部内容生成周报)")
     parser.add_argument("--water-log", help="水贴日志路径(周报融合用)")
+    parser.add_argument("--autopost-log", help="自动发贴日志路径(周报融合用)")
     parser.add_argument("--subject", required=True, help="邮件主题")
     parser.add_argument("--alert", help="直接发送的告警正文")
     parser.add_argument("--dry-run", action="store_true",
@@ -297,12 +344,13 @@ def main():
             body = "【即时告警】\n\n" + args.alert + "\n\n时间: " + \
                 time.strftime("%Y-%m-%d %H:%M:%S")
         elif args.weekly:
-            body, att_text, rng, _ = build_weekly(args.weekly, args.water_log)
+            body, att_text, rng, _ = build_weekly(args.weekly, args.water_log,
+                                                  args.autopost_log)
             body = "【贴吧签到周报】%s\n\n%s" % (rng, body)
             if att_text:
                 attachment = ("贴吧周报明细_%s.txt" % time.strftime("%Y-%m-%d"),
                               att_text)
-            rotate_paths = [args.weekly, args.water_log]
+            rotate_paths = [args.weekly, args.water_log, args.autopost_log]
         elif args.log:
             lines = today_lines(args.log)
             if lines is None:

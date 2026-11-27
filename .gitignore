@@ -16,6 +16,10 @@ water_device.json
 water_threads.json
 water_switch.json
 
+# 自动发贴配置与运行状态
+autopost_targets.json
+autopost_state.json
+
 # Python
 __pycache__/
 *.pyc
@@ -27,3 +31,4 @@ __pycache__/
 贴吧凭证更新指南.md
 贴吧自动签到部署规划.md
 docs/水贴目标清单.txt
+docs/自动发贴目标清单.txt
