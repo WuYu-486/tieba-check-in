@@ -93,12 +93,16 @@ for kw in kws:
                         "error": "no=%s %s" % (no, msg)}})
         continue
     verified = False
-    for _ in range(5):
-        time.sleep(3)
+    for _ in range(6):
+        time.sleep(5)
         if kw not in followed_names():
             verified = True
             break
-    results.append({{"kw": kw, "status": "ok", "verified": verified}})
+    if not verified:
+        results.append({{"kw": kw, "status": "pending",
+                        "error": "接口返回成功, 但关注状态仍为已关注"}})
+        continue
+    results.append({{"kw": kw, "status": "ok", "verified": True}})
 
     # 清理该吧的水贴目标(依据水贴缓存中的吧名匹配)
     hit = [tid for tid in water_posts
@@ -206,8 +210,11 @@ def main():
     for r in data["results"]:
         st = r["status"]
         if st == "ok":
-            note = "" if r.get("verified") else " (接口已受理, 关注状态确认有延迟)"
-            print("[%s] 已取消关注%s" % (r["kw"], note))
+            print("[%s] 已取消关注" % r["kw"])
+        elif st == "pending":
+            print("[%s] 接口返回成功但状态仍为已关注, 未删除任何配置; 请稍后重试"
+                  % r["kw"], file=sys.stderr)
+            rc = max(rc, 1)
         elif st == "not_followed":
             print("[%s] 未关注该吧, 跳过" % r["kw"])
             rc = max(rc, 1)
