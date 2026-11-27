@@ -378,6 +378,7 @@ class App:
         self._q = queue.Queue()
         self._busy = False
         self._exp_rows = []
+        self._lists_loaded = False
         self._text_widgets = []
         self._tree_registry = []
         self.font_size = load_font_size()
@@ -706,6 +707,22 @@ class App:
             self._sign_flow(force=False)
         elif name == "吧管理":
             self._exp_flow(force=False)
+        elif name in ("水贴", "自动发贴"):
+            self._lists_flow()
+
+    def _lists_flow(self):
+        """首次进入水贴/自动发贴页且列表尚未加载时, 实时拉取一次"""
+        if self._lists_loaded or self._busy:
+            return
+
+        def work(log):
+            return self._remote_py(SNAPSHOT_SCRIPT)
+
+        def done(snap):
+            self._render_water(snap)
+            self._render_autopost(snap)
+
+        self._bg("加载水贴/自动发贴列表", work, done)
 
     # ---------- 概览 ----------
 
@@ -818,10 +835,10 @@ class App:
         set_text(self.overview_text, "\n".join(lines))
         if age is None:
             self.ov_cache_label.configure(text="实时数据 · 刚刚更新")
-            self._render_water(snap)
-            self._render_autopost(snap)
         else:
             self.ov_cache_label.configure(text="缓存数据 · %s" % fmt_age(age))
+        self._render_water(snap)
+        self._render_autopost(snap)
 
     # ---------- 签到 ----------
 
@@ -937,6 +954,7 @@ class App:
                            lambda e: self._open_thread(self.water_tv))
 
     def _render_water(self, snap):
+        self._lists_loaded = True
         tv = self.water_tv
         tv.delete(*tv.get_children())
         posts = snap.get("posts") or []
@@ -1099,6 +1117,7 @@ class App:
         self.ap_tv.bind("<Double-1>", lambda e: self._open_thread(self.ap_tv))
 
     def _render_autopost(self, snap):
+        self._lists_loaded = True
         tv = self.ap_tv
         tv.delete(*tv.get_children())
         targets = snap.get("targets") or []
