@@ -26,6 +26,9 @@ import urllib.request
 import uuid
 
 BASE = os.path.dirname(os.path.abspath(__file__))
+# 本地仓库中脚本统一放在 scripts/, 配置与数据在仓库根目录; 服务器部署时全部平铺同目录
+if os.path.basename(BASE) == "scripts":
+    BASE = os.path.dirname(BASE)
 _cacert = os.path.join(BASE, "cacert.pem")
 if os.path.exists(_cacert):
     os.environ.setdefault("SSL_CERT_FILE", _cacert)

@@ -3,9 +3,9 @@
 """
 water_switch.py - 水贴开关管理(本地工具, 依赖 paramiko)
 用法:
-  python water_switch.py                        查看全部帖子: 开关状态 / 今日进度
-  python water_switch.py off <帖子URL或tid>...   关闭自动水贴
-  python water_switch.py on  <帖子URL或tid>...   重新开启自动水贴
+  python scripts/water_switch.py                        查看全部帖子: 开关状态 / 今日进度
+  python scripts/water_switch.py off <帖子URL或tid>...   关闭自动水贴
+  python scripts/water_switch.py on  <帖子URL或tid>...   重新开启自动水贴
 说明:
   新加入的帖子默认开启; 状态保存在服务器 water_switch.json, 修改即时生效,
   只决定每日 09:05 是否对该帖发帖, 切换状态本身不会触发水贴;

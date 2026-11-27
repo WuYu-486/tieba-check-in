@@ -3,9 +3,9 @@
 """
 add_water.py - 一键添加水贴(本地工具, 依赖 paramiko)
 用法:
-  python add_water.py <帖子URL或tid> [更多URL/tid...] [--dry-run] [--no-water]
-  例: python add_water.py https://tieba.baidu.com/p/8752415673
-      python add_water.py 8752415673 9786663118
+  python scripts/add_water.py <帖子URL或tid> [更多URL/tid...] [--dry-run] [--no-water]
+  例: python scripts/add_water.py https://tieba.baidu.com/p/8752415673
+      python scripts/add_water.py 8752415673 9786663118
 说明:
   吧名解析需要贴吧登录态, 本机匿名访问会被 403, 因此解析与服务器列表更新
   都通过 SSH 在服务器上完成(凭证见同目录 deploy.ini, gitignore 排除);
@@ -26,6 +26,9 @@ import sys
 import unicodedata
 
 BASE = os.path.dirname(os.path.abspath(__file__))
+# 本地仓库中脚本统一放在 scripts/, 配置与数据在仓库根目录; 服务器部署时全部平铺同目录
+if os.path.basename(BASE) == "scripts":
+    BASE = os.path.dirname(BASE)
 DEPLOY_FILE = os.path.join(BASE, "deploy.ini")
 POSTS_FILE = os.path.join(BASE, "water_posts.txt")
 DOC_FILE = os.path.join(BASE, "docs", "水贴目标清单.txt")
@@ -237,8 +240,9 @@ def rebuild_doc(posts, mapping, disabled=()):
         "规则: 每帖每天 4 条(贴吧经验上限), 每条 +6 经验(客户端协议), "
         "同帖同日内容一致(水/3/+3/6 随机选一)",
         "配置文件: 服务器 /opt/tieba-sign/water_posts.txt (仓库根目录有同名副本); "
-        "推荐用 add_water.py 一键添加, 自动同步两边并立即完成当日水贴",
-        "开关管理: python water_switch.py [on|off] <帖子URL或tid>, "
+        "推荐用 python scripts/add_water.py 一键添加, "
+        "自动同步两边并立即完成当日水贴",
+        "开关管理: python scripts/water_switch.py [on|off] <帖子URL或tid>, "
         "关闭的帖子不参与每日水贴(新加入默认开启)",
         "",
         "已加入水贴的吧及帖子(共 %d 个吧, %d 个帖子; 自动水贴开启 %d, 关闭 %d):"
@@ -256,7 +260,7 @@ def rebuild_doc(posts, mapping, disabled=()):
         "- 满额运行每天最多 +%d 经验(%d 帖开启 x 4 条 x 6, 各吧经验独立计算)"
         % (on_n * 24, on_n),
         "- 当日进度记录在服务器 water_state.json, 重复运行不会超发",
-        "- 增删目标: 推荐 python add_water.py <帖子URL或tid> "
+        "- 增删目标: 推荐 python scripts/add_water.py <帖子URL或tid> "
         "(自动同步服务器与本文档, 并立即完成当日 4 条水贴);",
         "  也可手动编辑 water_posts.txt 后上传服务器, 当天想立即生效可执行",
         "  /opt/python/bin/python3 /opt/tieba-sign/tieba_water.py --now",

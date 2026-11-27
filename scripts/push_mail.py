@@ -31,6 +31,9 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 BASE = os.path.dirname(os.path.abspath(__file__))
+# 本地仓库中脚本统一放在 scripts/, 配置与数据在仓库根目录; 服务器部署时全部平铺同目录
+if os.path.basename(BASE) == "scripts":
+    BASE = os.path.dirname(BASE)
 # 优先使用随程序部署的 CA 证书包(服务器系统证书过旧时避免 SSL 验证失败)
 _cacert = os.path.join(BASE, "cacert.pem")
 if os.path.exists(_cacert):
