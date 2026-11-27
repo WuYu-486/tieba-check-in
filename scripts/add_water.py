@@ -270,12 +270,12 @@ def rebuild_doc(posts, mapping, disabled=()):
         "- 当日进度记录在服务器 water_state.json, 重复运行不会超发",
         "- 增删目标: 推荐 python scripts/add_water.py <帖子URL或tid> "
         "(自动同步服务器与本文档, 并立即完成当日 4 条水贴);",
+        "  也可手动编辑 water_posts.txt 后上传服务器, 当天想立即生效可执行",
+        "  /opt/python/bin/python3 /opt/tieba-sign/tieba_water.py --now",
         "- 删除目标: python scripts/water_delete.py <帖子URL或tid>, "
         "同时清除当日进度与开关状态",
         "- 取关吧清理: python scripts/unfollow_forum.py <吧名>, "
         "取关并删除该吧的水贴/自动发贴目标",
-        "  也可手动编辑 water_posts.txt 后上传服务器, 当天想立即生效可执行",
-        "  /opt/python/bin/python3 /opt/tieba-sign/tieba_water.py --now",
         "- 开关: 关闭后不触发每日自动水贴, 但保留列表和当日进度; "
         "重新开启即时恢复(切换状态本身不会立即水贴)",
         "- 运行日志: 服务器 /opt/tieba-sign/tieba-water.log",
