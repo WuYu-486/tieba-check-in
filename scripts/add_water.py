@@ -196,6 +196,14 @@ def update_local_posts(tids):
     return new
 
 
+def write_local_posts(tids):
+    """按服务器列表整体重写本地 water_posts.txt(保留统一表头)"""
+    with open(POSTS_FILE, "w", encoding="utf-8") as f:
+        f.write(POSTS_HEADER)
+        for tid in tids:
+            f.write(tid + "\n")
+
+
 def parse_own_names():
     """从现有文档保留人工标注(如"自己的水楼")"""
     marks = {}
@@ -262,6 +270,10 @@ def rebuild_doc(posts, mapping, disabled=()):
         "- 当日进度记录在服务器 water_state.json, 重复运行不会超发",
         "- 增删目标: 推荐 python scripts/add_water.py <帖子URL或tid> "
         "(自动同步服务器与本文档, 并立即完成当日 4 条水贴);",
+        "- 删除目标: python scripts/water_delete.py <帖子URL或tid>, "
+        "同时清除当日进度与开关状态",
+        "- 取关吧清理: python scripts/unfollow_forum.py <吧名>, "
+        "取关并删除该吧的水贴/自动发贴目标",
         "  也可手动编辑 water_posts.txt 后上传服务器, 当天想立即生效可执行",
         "  /opt/python/bin/python3 /opt/tieba-sign/tieba_water.py --now",
         "- 开关: 关闭后不触发每日自动水贴, 但保留列表和当日进度; "
