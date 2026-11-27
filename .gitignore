@@ -3,12 +3,16 @@ cookies
 notify.ini
 deploy.ini
 qr.png
+.env
+.env.*
 
 # 部署用 CA 证书包
 cacert.pem
+*.pem
 
-# 运行日志
+# 运行日志(含轮转后的 .log.prev / cron / mail 日志)
 *.log
+*.log.prev
 
 # 水贴运行时状态(当日进度/设备指纹/帖子缓存/开关)
 water_state.json
@@ -20,12 +24,28 @@ water_switch.json
 autopost_targets.json
 autopost_state.json
 
+# 本地水贴目标列表(含个人帖子 tid, 不入库)
+water_posts.txt
+
 # Python
 __pycache__/
 *.pyc
+.venv/
+venv/
+env/
 
-# IDE
+# IDE / 系统
 .idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 临时与备份文件
+*.bak
+*.tmp
+*.orig
+*.rej
 
 # 文档
 贴吧凭证更新指南.md
