@@ -7,6 +7,8 @@ tieba_water.py - 百度贴吧水贴(客户端协议, 每帖每日4条, 每条+6�
 凭证: 同目录 cookies 文件(BDUSS=xxx)
 状态: water_state.json 记录当日进度, 重复运行不会超发
 设备: water_device.json 保存固定设备指纹(首次运行自动生成), 防风控
+开关: water_switch.json 记录已关闭的帖子, 默认全部开启; 关闭的不参与本次水贴,
+      由本地 water_switch.py 管理
 退出码: 0=全部成功  1=部分失败  2=凭证失效  3=接口异常
 """
 
@@ -33,6 +35,7 @@ POSTS_FILE = os.path.join(BASE, "water_posts.txt")
 STATE_FILE = os.path.join(BASE, "water_state.json")
 DEVICE_FILE = os.path.join(BASE, "water_device.json")
 THREAD_CACHE_FILE = os.path.join(BASE, "water_threads.json")
+SWITCH_FILE = os.path.join(BASE, "water_switch.json")
 LOG_FILE = os.path.join(BASE, "tieba-water.log")
 
 TBS_URL = "https://tieba.baidu.com/dc/common/tbs"
@@ -119,6 +122,24 @@ def load_json(path, default):
 def save_json(path, obj):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(obj, f, ensure_ascii=False, indent=1)
+
+
+def load_disabled():
+    """已关闭自动水贴的 tid 集合; 文件缺失或损坏时视为全部开启"""
+    raw = load_json(SWITCH_FILE, {})
+    if isinstance(raw, dict):
+        raw = raw.get("disabled", [])
+    if not isinstance(raw, list):
+        return set()
+    return {str(t) for t in raw}
+
+
+def save_switch(disabled):
+    """原子写入开关文件, 避免写一半被打断导致状态丢失"""
+    tmp = SWITCH_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"disabled": sorted(disabled)}, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, SWITCH_FILE)
 
 
 def load_device():
@@ -300,6 +321,9 @@ def main():
         log("错误: water_posts.txt 为空或不存在, 请先配置帖子列表")
         return EXIT_ERROR
     log("目标帖子 %d 个: %s" % (len(tids), ", ".join(tids)))
+    disabled = load_disabled()
+    if disabled:
+        log("已关闭自动水贴 %d 个: %s" % (len(disabled), ", ".join(sorted(disabled))))
 
     dev = load_device()
     cache = load_json(THREAD_CACHE_FILE, {})
@@ -309,8 +333,12 @@ def main():
         state = {"date": today, "posts": {}}
     posts_state = state.setdefault("posts", {})
 
-    ok_n, fail_n, skip_n = 0, 0, 0
+    ok_n, fail_n, skip_n, off_n = 0, 0, 0, 0
     for i, tid in enumerate(tids):
+        if tid in disabled:
+            log("[%s] 已关闭自动水贴, 跳过" % tid)
+            off_n += 1
+            continue
         ps = posts_state.setdefault(tid, {"sent": 0, "content": random.choice(CONTENT_POOL)})
         if ps["sent"] >= PER_POST_COUNT:
             log("[%s] 今日已完成%d条, 跳过" % (tid, ps["sent"]))
@@ -357,7 +385,11 @@ def main():
 
     save_json(STATE_FILE, state)
     log("-" * 50)
-    log("水贴完成: 成功 %d 帖, 失败 %d 帖, 已完成跳过 %d 帖" % (ok_n, fail_n, skip_n))
+    summary = "水贴完成: 成功 %d 帖, 失败 %d 帖, 已完成跳过 %d 帖" % (
+        ok_n, fail_n, skip_n)
+    if off_n:
+        summary += ", 已关闭跳过 %d 帖" % off_n
+    log(summary)
     return EXIT_PARTIAL if fail_n else EXIT_OK
 
 

@@ -10,6 +10,7 @@ add_water.py - 一键添加水贴(本地工具, 依赖 paramiko)
   吧名解析需要贴吧登录态, 本机匿名访问会被 403, 因此解析与服务器列表更新
   都通过 SSH 在服务器上完成(凭证见同目录 deploy.ini, gitignore 排除);
   添加成功后立即在服务器执行水贴, 自动补齐今日 4 条(已有进度的帖子会跳过);
+  新帖子默认开启自动水贴(关闭状态由 water_switch.py 管理);
   另外自动更新本地 water_posts.txt 并重建 docs/水贴目标清单.txt。
   --dry-run 只解析并预览, 不做任何修改; --no-water 只添加不立即水贴。
 退出码: 0=成功 1=部分失败 2=失败
@@ -59,10 +60,15 @@ if not {dry_run!r}:
                 f.write(r["tid"] + "\n")
             raw = r["tid"] + "\n"
             added.append(r["tid"])
+    # 新加入的帖子默认开启自动水贴(清除历史遗留的关闭状态)
+    disabled = tw.load_disabled()
+    if disabled.intersection(added):
+        tw.save_switch(disabled.difference(added))
 final_posts = tw.load_posts()
 mapping = {{tid: (cache.get(tid) or {{}}).get("kw") for tid in final_posts}}
 print("RESULT:" + json.dumps({{"results": results, "added": added,
-      "posts": final_posts, "map": mapping}}, ensure_ascii=True))
+      "posts": final_posts, "map": mapping,
+      "disabled": sorted(tw.load_disabled())}}, ensure_ascii=True))
 """
 
 
@@ -193,7 +199,7 @@ def parse_own_names():
     if os.path.exists(DOC_FILE):
         with open(DOC_FILE, "r", encoding="utf-8") as f:
             for line in f:
-                m = re.match(r"^(\S.*?)\s+(\d{10,})\s+https://", line)
+                m = re.match(r"^(\S.*?)\s+(\d{10,})\s+(?:\S+\s+)?https://", line)
                 if m and "自己的水楼" in m.group(1):
                     marks[m.group(2)] = "自己的水楼"
     return marks
@@ -208,15 +214,20 @@ def pad(s, width):
     return s + " " * max(0, width - disp_width(s))
 
 
-def rebuild_doc(posts, mapping):
+def rebuild_doc(posts, mapping, disabled=()):
     marks = parse_own_names()
+    disabled = set(disabled)
     rows = []
     for tid in posts:
         kw = mapping.get(tid) or tid
         name = "%s(%s)" % (kw, marks[tid]) if tid in marks else kw
-        rows.append((name, tid, "https://tieba.baidu.com/p/%s" % tid))
+        status = "关闭" if tid in disabled else "开启"
+        rows.append((name, tid, status, "https://tieba.baidu.com/p/%s" % tid))
     w1 = max([disp_width("吧名")] + [disp_width(r[0]) for r in rows]) + 2
     w2 = max([disp_width("帖子 tid")] + [len(r[1]) for r in rows]) + 2
+    w3 = disp_width("自动水贴") + 2
+    off_n = sum(1 for r in rows if r[2] == "关闭")
+    on_n = len(rows) - off_n
     lines = [
         "贴吧水贴目标清单",
         "================",
@@ -227,25 +238,30 @@ def rebuild_doc(posts, mapping):
         "同帖同日内容一致(水/3/+3/6 随机选一)",
         "配置文件: 服务器 /opt/tieba-sign/water_posts.txt (仓库根目录有同名副本); "
         "推荐用 add_water.py 一键添加, 自动同步两边并立即完成当日水贴",
+        "开关管理: python water_switch.py [on|off] <帖子URL或tid>, "
+        "关闭的帖子不参与每日水贴(新加入默认开启)",
         "",
-        "已开启水贴的吧及帖子(共 %d 个吧, %d 个帖子):" % (len(rows), len(rows)),
+        "已加入水贴的吧及帖子(共 %d 个吧, %d 个帖子; 自动水贴开启 %d, 关闭 %d):"
+        % (len(rows), len(rows), on_n, off_n),
         "",
-        pad("吧名", w1) + pad("帖子 tid", w2) + "帖子链接",
-        "-" * w1 + "  " + "-" * w2 + "  " + "-" * 40,
+        pad("吧名", w1) + pad("帖子 tid", w2) + pad("自动水贴", w3) + "帖子链接",
+        "-" * w1 + "  " + "-" * w2 + "  " + "-" * w3 + "  " + "-" * 40,
     ]
-    for name, tid, url in rows:
-        lines.append(pad(name, w1) + pad(tid, w2) + url)
+    for name, tid, status, url in rows:
+        lines.append(pad(name, w1) + pad(tid, w2) + pad(status, w3) + url)
     lines += [
         "",
         "备注:",
         "- 标注\"(自己的水楼)\"的为自己的帖子, 其余为吧友指定的公共水楼",
-        "- 满额运行每天最多 +%d 经验(%d 帖 x 4 条 x 6, 各吧经验独立计算)"
-        % (len(rows) * 24, len(rows)),
+        "- 满额运行每天最多 +%d 经验(%d 帖开启 x 4 条 x 6, 各吧经验独立计算)"
+        % (on_n * 24, on_n),
         "- 当日进度记录在服务器 water_state.json, 重复运行不会超发",
         "- 增删目标: 推荐 python add_water.py <帖子URL或tid> "
         "(自动同步服务器与本文档, 并立即完成当日 4 条水贴);",
         "  也可手动编辑 water_posts.txt 后上传服务器, 当天想立即生效可执行",
         "  /opt/python/bin/python3 /opt/tieba-sign/tieba_water.py --now",
+        "- 开关: 关闭后不触发每日自动水贴, 但保留列表和当日进度; "
+        "重新开启即时恢复(切换状态本身不会立即水贴)",
         "- 运行日志: 服务器 /opt/tieba-sign/tieba-water.log",
         "- 异常告警: 任务非零退出(凭证失效/部分失败/验证码重试超限等)自动发告警邮件",
         "- 周报: 每周五 22:05 与签到合并推送, 正文含运行总结与各吧经验(签到+水贴融合),",
@@ -294,7 +310,7 @@ def main():
         return 0 if ok_n == len(tids) else 1
 
     update_local_posts(data["added"])
-    rebuild_doc(data["posts"], data["map"])
+    rebuild_doc(data["posts"], data["map"], data.get("disabled", []))
     print("已更新本地 water_posts.txt 与 docs/水贴目标清单.txt")
     print("服务器列表已同步")
     rc = 0 if ok_n == len(tids) else 1

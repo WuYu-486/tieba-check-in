@@ -10,14 +10,18 @@ cacert.pem
 # 运行日志
 *.log
 
-# 水贴运行时状态(当日进度/设备指纹/帖子缓存)
+# 水贴运行时状态(当日进度/设备指纹/帖子缓存/开关)
 water_state.json
 water_device.json
 water_threads.json
+water_switch.json
 
 # Python
 __pycache__/
 *.pyc
+
+# IDE
+.idea/
 
 # 文档
 贴吧凭证更新指南.md

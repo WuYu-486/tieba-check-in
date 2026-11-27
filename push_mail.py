@@ -49,9 +49,10 @@ RE_SIGN_SUMMARY = re.compile(
 # 水贴明细行: [时间] [tid] 第i/n条 成功(pid=xxx exp+N) 内容='xxx'
 RE_WATER_DETAIL = re.compile(
     r"^\[([\d\- :]+)\] \[(\d+)\] 第\d+/\d+条 成功\((?:pid=\d+ )?exp\+(\d+)\) 内容='(.*)'$")
-# 水贴每日汇总行: [时间] 水贴完成: 成功 N 帖, 失败 N 帖, 已完成跳过 N 帖
+# 水贴每日汇总行: [时间] 水贴完成: 成功 N 帖, 失败 N 帖, 已完成跳过 N 帖(, 已关闭跳过 N 帖)
 RE_WATER_SUMMARY = re.compile(
-    r"^\[([\d\- :]+)\] 水贴完成: 成功 (\d+) 帖, 失败 (\d+) 帖, 已完成跳过 (\d+) 帖$")
+    r"^\[([\d\- :]+)\] 水贴完成: 成功 (\d+) 帖, 失败 (\d+) 帖, 已完成跳过 (\d+) 帖"
+    r"(?:, 已关闭跳过 (\d+) 帖)?$")
 
 
 def load_config():
@@ -182,15 +183,20 @@ def build_weekly(sign_log, water_log):
             fail_n += int(m.group(5))
     out.append("本周合计: 签到成功 %d 次, 失败 %d 次" % (ok_n, fail_n))
     if w_sum:
-        w_ok = w_fail = w_skip = 0
+        w_ok = w_fail = w_skip = w_off = 0
         for line in w_sum:
             m = RE_WATER_SUMMARY.match(line)
             if m:
                 w_ok += int(m.group(2))
                 w_fail += int(m.group(3))
                 w_skip += int(m.group(4))
-        out.append("水贴合计: 成功 %d 帖次, 失败 %d 帖次, 已完成跳过 %d 帖次"
-                   % (w_ok, w_fail, w_skip))
+                if m.group(5):
+                    w_off += int(m.group(5))
+        line = "水贴合计: 成功 %d 帖次, 失败 %d 帖次, 已完成跳过 %d 帖次" % (
+            w_ok, w_fail, w_skip)
+        if w_off:
+            line += ", 已关闭 %d 帖次" % w_off
+        out.append(line)
     else:
         out.append("水贴合计: 本周无水贴记录")
 
