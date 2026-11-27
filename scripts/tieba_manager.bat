@@ -1,10 +1,9 @@
 @echo off
 cd /d "%~dp0.."
-where python >nul 2>nul
+where pythonw >nul 2>nul
 if errorlevel 1 (
-    echo Python not found in PATH.
+    echo pythonw not found in PATH.
     pause
     exit /b 1
 )
-python scripts\tieba_manager.py
-if errorlevel 1 pause
+start "" pythonw "scripts\tieba_manager.py"

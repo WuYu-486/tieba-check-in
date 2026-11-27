@@ -24,6 +24,7 @@ import threading
 import webbrowser
 
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import messagebox, ttk
 
 import add_water
@@ -34,10 +35,14 @@ from tieba_water import PER_POST_COUNT
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REMOTE_PY = "/opt/python/bin/python3"
 
-FONT = ("Microsoft YaHei UI", 10)
-FONT_BOLD = ("Microsoft YaHei UI", 10, "bold")
-TITLE_FONT = ("Microsoft YaHei UI", 15, "bold")
-MONO = ("Consolas", 9)
+FAMILY_UI = "Microsoft YaHei UI"
+FAMILY_MONO = "Consolas"
+FONT_SIZE_DEFAULT = 13
+FONT_SIZE_CHOICES = [("小", 11), ("标准", 13), ("大", 15), ("特大", 17)]
+FONT = (FAMILY_UI, FONT_SIZE_DEFAULT)
+FONT_BOLD = (FAMILY_UI, FONT_SIZE_DEFAULT, "bold")
+TITLE_FONT = (FAMILY_UI, FONT_SIZE_DEFAULT + 4, "bold")
+MONO = (FAMILY_MONO, FONT_SIZE_DEFAULT - 1)
 
 LOG_FILES = [
     "tieba-run.log", "tieba-run.log.prev",
@@ -168,7 +173,7 @@ def make_tree(parent, columns, widths, height=12, selectmode="extended"):
     return frame, tv
 
 
-def ask_water_add(parent):
+def ask_water_add(parent, ui_font):
     dlg = tk.Toplevel(parent)
     dlg.title("新增水贴目标")
     dlg.transient(parent)
@@ -178,7 +183,7 @@ def ask_water_add(parent):
 
     ttk.Label(body, text="帖子链接或 tid(可多个, 用空格/逗号/换行分隔)").grid(
         row=0, column=0, sticky="w")
-    txt = tk.Text(body, width=56, height=5, font=FONT)
+    txt = tk.Text(body, width=56, height=5, font=ui_font)
     txt.grid(row=1, column=0, sticky="we", pady=(4, 8))
 
     mode = tk.StringVar(value="water")
@@ -212,7 +217,7 @@ def ask_water_add(parent):
     return result or None
 
 
-def ask_autopost_add(parent):
+def ask_autopost_add(parent, ui_font):
     dlg = tk.Toplevel(parent)
     dlg.title("新增自动发贴目标")
     dlg.transient(parent)
@@ -222,11 +227,11 @@ def ask_autopost_add(parent):
 
     ttk.Label(body, text="帖子链接或 tid(可多个, 用空格/逗号/换行分隔)").grid(
         row=0, column=0, sticky="w")
-    txt = tk.Text(body, width=56, height=4, font=FONT)
+    txt = tk.Text(body, width=56, height=4, font=ui_font)
     txt.grid(row=1, column=0, sticky="we", pady=(4, 8))
 
     ttk.Label(body, text="发贴内容(单行)").grid(row=2, column=0, sticky="w")
-    content = ttk.Entry(body, width=56, font=FONT)
+    content = ttk.Entry(body, width=56)
     content.grid(row=3, column=0, sticky="we", pady=(4, 8))
 
     row = ttk.Frame(body)
@@ -279,6 +284,9 @@ class App:
         self._q = queue.Queue()
         self._busy = False
         self._exp_rows = []
+        self._text_widgets = []
+        self._tree_registry = []
+        self.font_size = FONT_SIZE_DEFAULT
         try:
             self.deploy_info = load_deploy()
         except SystemExit:
@@ -286,6 +294,8 @@ class App:
 
         self._setup_style()
         self._build()
+        self._apply_font(FONT_SIZE_DEFAULT)
+        self.root.report_callback_exception = self._report_exception
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(100, self._poll)
         self.root.after(400, self.act_overview)
@@ -300,18 +310,48 @@ class App:
             except Exception:
                 pass
         self.root.option_add("*Font", FONT)
-        style = ttk.Style()
+        self.style = ttk.Style()
+        style = self.style
         try:
             style.theme_use("clam")
         except tk.TclError:
             pass
         style.configure(".", font=FONT)
-        style.configure("Treeview", font=FONT, rowheight=26)
+        style.configure("Treeview", font=FONT, rowheight=int(FONT_SIZE_DEFAULT * 2.3))
         style.configure("Treeview.Heading", font=FONT_BOLD)
         style.configure("Title.TLabel", font=TITLE_FONT)
         style.configure("Hint.TLabel", foreground="#666666")
         style.configure("Warn.TLabel", foreground="#b03a2e")
         style.configure("Section.TLabelframe.Label", font=FONT_BOLD)
+
+    def _apply_font(self, size):
+        self.font_size = size
+        ui = (FAMILY_UI, size)
+        self.style.configure(".", font=ui)
+        self.style.configure("Treeview", font=ui, rowheight=int(size * 2.3))
+        self.style.configure("Treeview.Heading", font=(FAMILY_UI, size, "bold"))
+        self.style.configure("Title.TLabel", font=(FAMILY_UI, size + 4, "bold"))
+        self.style.configure("Section.TLabelframe.Label",
+                             font=(FAMILY_UI, size, "bold"))
+        self.root.option_add("*Font", ui)
+        self.root.option_add("*TCombobox*Listbox.font", ui)
+        for name in ("TkDefaultFont", "TkTextFont", "TkHeadingFont",
+                     "TkMenuFont", "TkCaptionFont", "TkTooltipFont"):
+            try:
+                tkfont.nametofont(name).configure(family=FAMILY_UI, size=size)
+            except tk.TclError:
+                pass
+        mono = (FAMILY_MONO, max(9, size - 1))
+        for widget in self._text_widgets:
+            widget.configure(font=mono)
+        factor = size / float(FONT_SIZE_DEFAULT)
+        for tv, widths in self._tree_registry:
+            for key, base in widths.items():
+                tv.column(key, width=int(base * factor))
+
+    def _on_font_choice(self, _event=None):
+        mapping = dict(FONT_SIZE_CHOICES)
+        self._apply_font(mapping.get(self.font_choice.get(), FONT_SIZE_DEFAULT))
 
     def _build(self):
         self.root.columnconfigure(0, weight=1)
@@ -324,6 +364,15 @@ class App:
             side="left", padx=(12, 0), pady=(5, 0))
         self.deploy_label = ttk.Label(header, style="Hint.TLabel")
         self.deploy_label.pack(side="right", pady=(5, 0))
+        fontbar = ttk.Frame(header)
+        fontbar.pack(side="right", padx=(0, 18), pady=(5, 0))
+        ttk.Label(fontbar, text="字号").pack(side="left")
+        self.font_choice = tk.StringVar(value=FONT_SIZE_CHOICES[1][0])
+        self.font_combo = ttk.Combobox(
+            fontbar, textvariable=self.font_choice, state="readonly", width=5,
+            values=[name for name, _ in FONT_SIZE_CHOICES])
+        self.font_combo.pack(side="left", padx=(6, 0))
+        self.font_combo.bind("<<ComboboxSelected>>", self._on_font_choice)
         self._update_deploy_label()
 
         self.nb = ttk.Notebook(self.root)
@@ -341,6 +390,7 @@ class App:
         out.columnconfigure(0, weight=1)
         out.rowconfigure(0, weight=1)
         self.out_frame, self.out_text = make_text(out, height=9, mono=True)
+        self._text_widgets.append(self.out_text)
         self.out_frame.grid(row=0, column=0, sticky="nsew")
         ttk.Button(out, text="清空", width=6,
                    command=lambda: set_text(self.out_text, "")).grid(
@@ -505,6 +555,20 @@ class App:
             return
         self.root.destroy()
 
+    def _report_exception(self, exc_type, exc_value, tb):
+        import traceback
+        text = "".join(traceback.format_exception(exc_type, exc_value, tb))
+        self._append("!!! 界面异常:\n" + text)
+        log_path = os.path.join(BASE, "tieba-manager-error.log")
+        try:
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(text + "\n")
+        except OSError:
+            pass
+        messagebox.showerror(
+            "界面异常", "%s: %s\n详情已写入 %s"
+            % (exc_type.__name__, exc_value, log_path))
+
     def _notice(self, title, code, ok_msg):
         if code == 0:
             messagebox.showinfo(title, ok_msg)
@@ -528,6 +592,7 @@ class App:
         ttk.Label(bar, text="读取服务器状态、定时任务与今日进度",
                   style="Hint.TLabel").pack(side="left", padx=(10, 0))
         frame, self.overview_text = make_text(tab, height=20)
+        self._text_widgets.append(self.overview_text)
         frame.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
         set_text(self.overview_text, "正在加载概览...")
 
@@ -610,6 +675,7 @@ class App:
         ttk.Label(tab, text="tieba-run.log 最近 80 行:", style="Hint.TLabel").grid(
             row=1, column=0, sticky="w", pady=(8, 2))
         frame, self.sign_text = make_text(tab, height=18)
+        self._text_widgets.append(self.sign_text)
         frame.grid(row=2, column=0, sticky="nsew")
 
     def act_sign(self):
@@ -675,6 +741,7 @@ class App:
         widths = {"idx": 46, "kw": 170, "tid": 120, "switch": 90,
                   "progress": 90, "url": 290}
         frame, self.water_tv = make_tree(tab, cols, widths, height=14)
+        self._tree_registry.append((self.water_tv, widths))
         frame.grid(row=2, column=0, sticky="nsew")
         self.water_tv.bind("<Double-1>",
                            lambda e: self._open_thread(self.water_tv))
@@ -710,7 +777,7 @@ class App:
                  self._render_water)
 
     def act_water_add(self):
-        data = ask_water_add(self.root)
+        data = ask_water_add(self.root, (FAMILY_UI, self.font_size))
         if not data:
             return
         args = ["add_water.py"] + data["targets"]
@@ -826,6 +893,7 @@ class App:
         widths = {"idx": 42, "kw": 130, "tid": 112, "content": 210, "count": 58,
                   "switch": 88, "progress": 88, "url": 240}
         frame, self.ap_tv = make_tree(tab, cols, widths, height=14)
+        self._tree_registry.append((self.ap_tv, widths))
         frame.grid(row=2, column=0, sticky="nsew")
         self.ap_tv.bind("<Double-1>", lambda e: self._open_thread(self.ap_tv))
 
@@ -855,7 +923,7 @@ class App:
                  self._render_autopost)
 
     def act_ap_add(self):
-        data = ask_autopost_add(self.root)
+        data = ask_autopost_add(self.root, (FAMILY_UI, self.font_size))
         if not data:
             return
         args = ["autopost_manage.py", "add", *data["targets"],
@@ -940,7 +1008,7 @@ class App:
         cleanup.grid(row=0, column=0, sticky="ew")
         cleanup.columnconfigure(1, weight=1)
         ttk.Label(cleanup, text="吧名").grid(row=0, column=0, sticky="w")
-        self.cleanup_entry = ttk.Entry(cleanup, font=FONT)
+        self.cleanup_entry = ttk.Entry(cleanup)
         self.cleanup_entry.grid(row=0, column=1, sticky="we", padx=(8, 8))
         ttk.Button(cleanup, text="执行清理", command=self.act_cleanup).grid(
             row=0, column=2, sticky="e")
@@ -977,6 +1045,7 @@ class App:
                   "next": 70, "need": 90, "signed": 90}
         frame, self.exp_tv = make_tree(exp, cols, widths, height=10,
                                        selectmode="browse")
+        self._tree_registry.append((self.exp_tv, widths))
         frame.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
 
     def act_cleanup(self):
@@ -1103,7 +1172,7 @@ class App:
         alert.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         alert.columnconfigure(0, weight=1)
         self.alert_text = tk.StringVar(value="这是一封来自贴吧管理中心的测试告警邮件")
-        ttk.Entry(alert, textvariable=self.alert_text, font=FONT).grid(
+        ttk.Entry(alert, textvariable=self.alert_text).grid(
             row=0, column=0, sticky="we")
         ttk.Button(alert, text="发送测试告警", command=self.act_mail_alert).grid(
             row=0, column=1, padx=(8, 0))
@@ -1183,6 +1252,7 @@ class App:
                   style="Hint.TLabel").pack(side="left", padx=(10, 0))
 
         frame, self.log_text = make_text(tab, height=20)
+        self._text_widgets.append(self.log_text)
         frame.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
 
     def act_logs(self):
@@ -1208,9 +1278,27 @@ def main():
             sys.stderr.reconfigure(encoding="utf-8")
         except Exception:
             pass
-    app = App()
-    app.root.mainloop()
+    try:
+        app = App()
+        app.root.mainloop()
+    except Exception:
+        import traceback
+        log_path = os.path.join(BASE, "tieba-manager-error.log")
+        text = traceback.format_exc()
+        try:
+            with open(log_path, "w", encoding="utf-8") as f:
+                f.write(text)
+        except OSError:
+            pass
+        try:
+            messagebox.showerror("贴吧管理中心启动失败",
+                                 "启动异常, 详情见 %s\n\n%s"
+                                 % (log_path, text[-800:]))
+        except Exception:
+            pass
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
