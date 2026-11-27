@@ -24,6 +24,10 @@ water_switch.json
 autopost_targets.json
 autopost_state.json
 
+# 管理中心本地缓存与界面偏好
+tieba-manager-cache.json
+tieba-manager-settings.json
+
 # 本地水贴目标列表(含个人帖子 tid, 不入库)
 water_posts.txt
 

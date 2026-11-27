@@ -53,6 +53,98 @@ LOG_FILES = [
     "mail.log", "cron-run.log", "water-cron.log", "autopost-cron.log",
 ]
 
+CACHE_FILE = os.path.join(BASE, "tieba-manager-cache.json")
+SETTINGS_FILE = os.path.join(BASE, "tieba-manager-settings.json")
+CACHE_TTL = {"overview": 120, "sign": 60, "exp": 600}
+
+
+def _atomic_write(path, text):
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def fmt_age(seconds):
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return "刚刚"
+    if seconds < 3600:
+        return "%d 分钟前" % (seconds // 60)
+    if seconds < 86400:
+        return "%d 小时前" % (seconds // 3600)
+    return "%d 天前" % (seconds // 86400)
+
+
+class Cache:
+    """内存 + 磁盘 JSON 两级缓存, 线程安全"""
+
+    def __init__(self, path):
+        self.path = path
+        self.lock = threading.Lock()
+        self.data = {}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            if isinstance(raw, dict):
+                self.data = {k: v for k, v in raw.items()
+                             if isinstance(v, dict)
+                             and "ts" in v and "value" in v}
+        except (OSError, ValueError):
+            pass
+
+    def get(self, key, ttl):
+        with self.lock:
+            entry = self.data.get(key)
+        if not entry:
+            return None
+        try:
+            age = time.time() - float(entry.get("ts", 0))
+        except (TypeError, ValueError):
+            return None
+        return {"value": entry.get("value"), "age": age, "fresh": age <= ttl}
+
+    def put(self, key, value):
+        with self.lock:
+            self.data[key] = {"ts": time.time(), "value": value}
+            raw = json.dumps(self.data, ensure_ascii=False)
+        _atomic_write(self.path, raw)
+
+    def invalidate(self, *keys):
+        with self.lock:
+            changed = False
+            for key in keys:
+                if self.data.pop(key, None) is not None:
+                    changed = True
+            raw = json.dumps(self.data, ensure_ascii=False) if changed else None
+        if raw is not None:
+            _atomic_write(self.path, raw)
+
+    def clear(self):
+        with self.lock:
+            self.data = {}
+            raw = "{}"
+        _atomic_write(self.path, raw)
+
+
+def load_font_size():
+    try:
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            size = int(json.load(f).get("font_size", 0))
+        if size in [s for _, s in FONT_SIZE_CHOICES]:
+            return size
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return FONT_SIZE_DEFAULT
+
+
+def save_font_size(size):
+    _atomic_write(SETTINGS_FILE,
+                  json.dumps({"font_size": size}, ensure_ascii=False))
+
 SNAPSHOT_SCRIPT = r"""
 import json
 import os
@@ -288,7 +380,8 @@ class App:
         self._exp_rows = []
         self._text_widgets = []
         self._tree_registry = []
-        self.font_size = FONT_SIZE_DEFAULT
+        self.font_size = load_font_size()
+        self.cache = Cache(CACHE_FILE)
         try:
             self.deploy_info = load_deploy()
         except SystemExit:
@@ -296,11 +389,12 @@ class App:
 
         self._setup_style()
         self._build()
-        self._apply_font(FONT_SIZE_DEFAULT)
+        self._apply_font(self.font_size)
         self.root.report_callback_exception = self._report_exception
+        self.nb.bind("<<NotebookTabChanged>>", self._on_tab_changed)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(100, self._poll)
-        self.root.after(400, self.act_overview)
+        self.root.after(400, lambda: self._overview_flow(False))
 
     # ---------- 基础设施 ----------
 
@@ -353,7 +447,9 @@ class App:
 
     def _on_font_choice(self, _event=None):
         mapping = dict(FONT_SIZE_CHOICES)
-        self._apply_font(mapping.get(self.font_choice.get(), FONT_SIZE_DEFAULT))
+        size = mapping.get(self.font_choice.get(), FONT_SIZE_DEFAULT)
+        self._apply_font(size)
+        save_font_size(size)
 
     def _build(self):
         self.root.columnconfigure(0, weight=1)
@@ -369,7 +465,9 @@ class App:
         fontbar = ttk.Frame(header)
         fontbar.pack(side="right", padx=(0, 18), pady=(5, 0))
         ttk.Label(fontbar, text="字号").pack(side="left")
-        self.font_choice = tk.StringVar(value=FONT_SIZE_CHOICES[1][0])
+        self.font_choice = tk.StringVar(
+            value=next((name for name, s in FONT_SIZE_CHOICES
+                        if s == self.font_size), FONT_SIZE_CHOICES[1][0]))
         self.font_combo = ttk.Combobox(
             fontbar, textvariable=self.font_choice, state="readonly", width=5,
             values=[name for name, _ in FONT_SIZE_CHOICES])
@@ -587,6 +685,28 @@ class App:
     def _selected(self, tv):
         return list(tv.selection())
 
+    def _invalidate(self, *keys):
+        self.cache.invalidate(*keys)
+        labels = {"overview": getattr(self, "ov_cache_label", None),
+                  "sign": getattr(self, "sign_cache_label", None),
+                  "exp": getattr(self, "exp_cache_label", None)}
+        for key in keys:
+            label = labels.get(key)
+            if label is not None:
+                label.configure(text="数据已过期, 建议刷新")
+
+    def _on_tab_changed(self, _event=None):
+        try:
+            name = self.nb.tab(self.nb.select(), "text").strip()
+        except tk.TclError:
+            return
+        if name == "概览":
+            self._overview_flow(force=False)
+        elif name == "签到":
+            self._sign_flow(force=False)
+        elif name == "吧管理":
+            self._exp_flow(force=False)
+
     # ---------- 概览 ----------
 
     def _build_overview(self):
@@ -597,8 +717,12 @@ class App:
         bar = ttk.Frame(tab)
         bar.grid(row=0, column=0, sticky="ew")
         ttk.Button(bar, text="刷新概览", command=self.act_overview).pack(side="left")
+        ttk.Button(bar, text="清除缓存", command=self.act_cache_clear).pack(
+            side="left", padx=(8, 0))
         ttk.Label(bar, text="读取服务器状态、定时任务与今日进度",
                   style="Hint.TLabel").pack(side="left", padx=(10, 0))
+        self.ov_cache_label = ttk.Label(bar, text="尚未加载", style="Hint.TLabel")
+        self.ov_cache_label.pack(side="right")
         frame, self.overview_text = make_text(tab, height=20)
         self._text_widgets.append(self.overview_text)
         frame.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
@@ -619,14 +743,43 @@ class App:
             ")" % d)
 
     def act_overview(self):
+        self._overview_flow(force=True)
+
+    def _overview_flow(self, force):
+        if not force:
+            cached = self.cache.get("overview", CACHE_TTL["overview"])
+            if cached and isinstance(cached["value"], dict) \
+                    and "snap" in cached["value"]:
+                self._render_overview(cached["value"], age=cached["age"])
+                if cached["fresh"] or self._busy:
+                    return
+        if self._busy:
+            if force:
+                messagebox.showinfo("请稍候", "已有任务正在执行, 请等待其完成")
+            return
+
         def work(log):
             snap = self._remote_py(SNAPSHOT_SCRIPT)
-            code, out, err = self._ssh_exec(self._overview_cmd(), timeout=60)
-            return {"snap": snap, "info": out}
+            _, out, _ = self._ssh_exec(self._overview_cmd(), timeout=60)
+            payload = {"snap": snap, "info": out}
+            self.cache.put("overview", payload)
+            return payload
 
-        self._bg("刷新概览", work, self._render_overview)
+        self._bg("刷新概览", work,
+                 lambda payload: self._render_overview(payload, age=None))
 
-    def _render_overview(self, payload):
+    def act_cache_clear(self):
+        if not messagebox.askyesno(
+                "清除缓存",
+                "清除概览/签到/经验的本地缓存(不影响服务器数据), 继续?"):
+            return
+        self.cache.clear()
+        for label in (self.ov_cache_label, self.sign_cache_label,
+                      self.exp_cache_label):
+            label.configure(text="缓存已清除")
+        self._append("已清除本地缓存")
+
+    def _render_overview(self, payload, age=0):
         snap = payload["snap"]
         d = self._ensure_deploy()
         posts = snap.get("posts") or []
@@ -663,8 +816,12 @@ class App:
             else:
                 lines.append("    " + line)
         set_text(self.overview_text, "\n".join(lines))
-        self._render_water(snap)
-        self._render_autopost(snap)
+        if age is None:
+            self.ov_cache_label.configure(text="实时数据 · 刚刚更新")
+            self._render_water(snap)
+            self._render_autopost(snap)
+        else:
+            self.ov_cache_label.configure(text="缓存数据 · %s" % fmt_age(age))
 
     # ---------- 签到 ----------
 
@@ -680,6 +837,8 @@ class App:
             side="left", padx=(8, 0))
         ttk.Label(bar, text="在服务器执行, 结果写入 tieba-run.log 并计入周报",
                   style="Hint.TLabel").pack(side="left", padx=(10, 0))
+        self.sign_cache_label = ttk.Label(bar, text="尚未加载", style="Hint.TLabel")
+        self.sign_cache_label.pack(side="right")
         ttk.Label(tab, text="tieba-run.log 最近 80 行:", style="Hint.TLabel").grid(
             row=1, column=0, sticky="w", pady=(8, 2))
         frame, self.sign_text = make_text(tab, height=18)
@@ -693,10 +852,13 @@ class App:
             _, tail, _ = self._ssh_exec(
                 "cd %s && tail -n 80 tieba-run.log 2>/dev/null"
                 % shlex.quote(self._dir()), timeout=60)
+            self.cache.put("sign", tail)
             return {"code": code, "tail": tail}
 
         def done(p):
+            self._invalidate("overview", "exp")
             set_text(self.sign_text, p["tail"])
+            self.sign_cache_label.configure(text="实时数据 · 刚刚更新")
             if p["code"] == 0:
                 messagebox.showinfo("签到完成", "全部关注吧签到成功")
             elif p["code"] == 2:
@@ -708,14 +870,34 @@ class App:
         self._bg("立即签到", work, done)
 
     def act_sign_log(self):
+        self._sign_flow(force=True)
+
+    def _sign_flow(self, force):
+        if not force:
+            cached = self.cache.get("sign", CACHE_TTL["sign"])
+            if cached and isinstance(cached["value"], str):
+                set_text(self.sign_text, cached["value"])
+                self.sign_cache_label.configure(
+                    text="缓存数据 · %s" % fmt_age(cached["age"]))
+                if cached["fresh"] or self._busy:
+                    return
+        if self._busy:
+            if force:
+                messagebox.showinfo("请稍候", "已有任务正在执行, 请等待其完成")
+            return
+
         def work(log):
             _, out, _ = self._ssh_exec(
                 "cd %s && tail -n 80 tieba-run.log 2>/dev/null"
                 % shlex.quote(self._dir()), timeout=60)
+            self.cache.put("sign", out)
             return out
 
-        self._bg("刷新签到日志", work,
-                 lambda text: set_text(self.sign_text, text))
+        def done(text):
+            set_text(self.sign_text, text)
+            self.sign_cache_label.configure(text="实时数据 · 刚刚更新")
+
+        self._bg("刷新签到日志", work, done)
 
     # ---------- 水贴 ----------
 
@@ -802,6 +984,11 @@ class App:
         def done(p):
             if p["snap"]:
                 self._render_water(p["snap"])
+            if not data["dry"]:
+                if data["no_water"]:
+                    self._invalidate("overview")
+                else:
+                    self._invalidate("overview", "exp")
             if p["code"] != 0:
                 messagebox.showwarning(
                     "新增水贴", "部分目标未处理成功(退出码 %d), 详见运行输出" % p["code"])
@@ -822,6 +1009,7 @@ class App:
 
         def done(p):
             self._render_water(p["snap"])
+            self._invalidate("overview")
             self._notice("水贴开关", p["code"], "开关已更新, 切换状态不会立即发贴")
 
         self._bg("水贴%s" % ("开启" if action == "on" else "关闭"), work, done)
@@ -844,6 +1032,7 @@ class App:
 
         def done(p):
             self._render_water(p["snap"])
+            self._invalidate("overview")
             self._notice("删除水贴", p["code"], "已删除所选水贴目标")
 
         self._bg("删除水贴目标", work, done)
@@ -864,7 +1053,11 @@ class App:
                                % (code, (err.strip() or "详见运行输出")))
             return self._remote_py(SNAPSHOT_SCRIPT)
 
-        self._bg("立即执行水贴", work, self._render_water)
+        def done(snap):
+            self._render_water(snap)
+            self._invalidate("overview", "exp")
+
+        self._bg("立即执行水贴", work, done)
 
     # ---------- 自动发贴 ----------
 
@@ -943,6 +1136,7 @@ class App:
 
         def done(p):
             self._render_autopost(p["snap"])
+            self._invalidate("overview")
             self._notice("新增自动发贴", p["code"],
                          "目标已添加(不会立即发贴, 次日 13:05 生效)")
 
@@ -960,6 +1154,7 @@ class App:
 
         def done(p):
             self._render_autopost(p["snap"])
+            self._invalidate("overview")
             self._notice("自动发贴开关", p["code"], "开关已更新(不会立即发贴)")
 
         self._bg("自动发贴%s" % ("开启" if action == "on" else "关闭"), work, done)
@@ -981,6 +1176,7 @@ class App:
 
         def done(p):
             self._render_autopost(p["snap"])
+            self._invalidate("overview")
             self._notice("删除自动发贴", p["code"], "已删除所选目标")
 
         self._bg("删除自动发贴目标", work, done)
@@ -1000,8 +1196,12 @@ class App:
                                % (code, (err.strip() or "详见运行输出")))
             return self._remote_py(SNAPSHOT_SCRIPT)
 
-        self._bg("自动发贴预览" if dry else "立即执行自动发贴", work,
-                 self._render_autopost)
+        def done(snap):
+            self._render_autopost(snap)
+            if not dry:
+                self._invalidate("overview", "exp")
+
+        self._bg("自动发贴预览" if dry else "立即执行自动发贴", work, done)
 
     # ---------- 吧管理(清理/经验) ----------
 
@@ -1043,6 +1243,8 @@ class App:
         combo.bind("<<ComboboxSelected>>", lambda e: self._render_exp())
         ttk.Label(bar, text="exp=经验降序  need=最快升级  level=等级降序  name=吧名",
                   style="Hint.TLabel").pack(side="left", padx=(10, 0))
+        self.exp_cache_label = ttk.Label(bar, text="尚未加载", style="Hint.TLabel")
+        self.exp_cache_label.pack(side="right", padx=(0, 14))
         self.exp_summary = ttk.Label(bar, text="尚未加载", style="Hint.TLabel")
         self.exp_summary.pack(side="right")
 
@@ -1092,6 +1294,7 @@ class App:
             def done2(snap2):
                 self._render_water(snap2)
                 self._render_autopost(snap2)
+                self._invalidate("overview")
                 self.cleanup_entry.delete(0, "end")
                 messagebox.showinfo("清理完成", "该吧的水贴/自动发贴目标已删除并同步")
 
@@ -1100,6 +1303,23 @@ class App:
         self._bg("检查清理影响", work, done)
 
     def act_exp(self):
+        self._exp_flow(force=True)
+
+    def _exp_flow(self, force):
+        if not force:
+            cached = self.cache.get("exp", CACHE_TTL["exp"])
+            if cached and isinstance(cached["value"], list):
+                self._exp_rows = cached["value"]
+                self._render_exp()
+                self.exp_cache_label.configure(
+                    text="缓存数据 · %s" % fmt_age(cached["age"]))
+                if cached["fresh"] or self._busy:
+                    return
+        if self._busy:
+            if force:
+                messagebox.showinfo("请稍候", "已有任务正在执行, 请等待其完成")
+            return
+
         def work(log):
             try:
                 thresholds = tieba_exp.load_thresholds()
@@ -1108,11 +1328,14 @@ class App:
             data = self._remote_py(EXP_SCRIPT, timeout=90)
             if data.get("error"):
                 raise AppError("经验查询失败: %s" % data["error"])
-            return tieba_exp.compute(data["forums"], thresholds)
+            rows = tieba_exp.compute(data["forums"], thresholds)
+            self.cache.put("exp", rows)
+            return rows
 
         def done(rows):
             self._exp_rows = rows
             self._render_exp()
+            self.exp_cache_label.configure(text="实时数据 · 刚刚更新")
 
         self._bg("查询关注吧经验", work, done)
 
