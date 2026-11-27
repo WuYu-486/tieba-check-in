@@ -163,7 +163,7 @@ def rebuild_doc(targets, progress):
         "  python scripts/autopost_manage.py add <帖子URL或tid> --content \"内容\" [--count N]",
         "  python scripts/autopost_manage.py on|off <帖子URL或tid>...",
         "  python scripts/autopost_manage.py del <帖子URL或tid>...",
-        "  python scripts/unfollow_forum.py <吧名>    取关并删除该吧的自动发贴目标",
+        "  python scripts/cleanup_forum.py <吧名>    删除该吧的全部水贴/自动发贴目标",
         "",
         "已配置目标(共 %d 个, 自动发贴开启 %d, 关闭 %d):"
         % (len(rows), on_n, len(rows) - on_n),

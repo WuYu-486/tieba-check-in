@@ -274,8 +274,8 @@ def rebuild_doc(posts, mapping, disabled=()):
         "  /opt/python/bin/python3 /opt/tieba-sign/tieba_water.py --now",
         "- 删除目标: python scripts/water_delete.py <帖子URL或tid>, "
         "同时清除当日进度与开关状态",
-        "- 取关吧清理: python scripts/unfollow_forum.py <吧名>, "
-        "取关并删除该吧的水贴/自动发贴目标",
+        "- 清理某吧: python scripts/cleanup_forum.py <吧名>, "
+        "删除该吧的全部水贴/自动发贴目标",
         "- 开关: 关闭后不触发每日自动水贴, 但保留列表和当日进度; "
         "重新开启即时恢复(切换状态本身不会立即水贴)",
         "- 运行日志: 服务器 /opt/tieba-sign/tieba-water.log",
